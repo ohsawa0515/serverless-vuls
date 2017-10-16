@@ -1,0 +1,563 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Serverless Vuls scan"
+Parameters:
+  LambdaSecurityGroupIds:
+    Type: "CommaDelimitedList"
+    Description: "Security Group IDs of Lambda (e.g. sg-xxxxxxxx)"
+  LambdaSubnetIds:
+    Type: "CommaDelimitedList"
+    Description: "Subnet IDs of Lambda (e.g. subnet-xxxxxxxx, subnet-xxxxxxxx)"
+  KmsKeyId:
+    Type: "String"
+    Description: "The Amazon Resource Name (ARN) of an AWS Key Management Service (AWS KMS) key that Lambda uses to encrypt and decrypt environment variable values"
+  SSHKey:
+    Type: "String"
+    NoEcho: true
+    Description: "RSA key for SSH"
+  RDSSecurityGroupIds:
+    Type: "CommaDelimitedList"
+    Description: "Security Group IDs of RDS (e.g. sg-xxxxxxxx)"
+  RDSSubnetIds:
+    Type: "CommaDelimitedList"
+    Description: "Subnet IDs of RDS (e.g. subnet-xxxxxxxx, subnet-xxxxxxxx)"
+  RDSDBPwd:
+    Type: "String"
+    NoEcho: true
+    Description: "The database admin account password"
+    MinLength: 1
+    MaxLength: 30
+    AllowedPattern: ^[a-zA-Z0-9]*$
+  DBUser:
+    Type: "String"
+    Default: "cveadmin"
+    Description: "The database admin account name"
+  DBName:
+    Type: "String"
+    Default: "cvedb"
+    Description: "The database name"
+  DBPort:
+    Type: "String"
+    Default: "3306"
+    Description: "The port number of database"
+Resources:
+  # --- IAM ---
+  LambdaIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "policy_lambda_vuls_execution"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GetKeyPolicy
+                Resource: "*"
+              -
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                Resource: "*"
+              -
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                Resource: "*"
+              -
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${VulsScanReport}/*"
+  StepFunctionsIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - !Sub "states.${AWS::Region}.amazonaws.com"
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+      Path: "/"
+  # --- RDS ---
+  DBParameterGroup:
+    Type: "AWS::RDS::DBParameterGroup"
+    Properties:
+      Description: "mysql5.6"
+      Family: "mysql5.6"
+      Parameters:
+        innodb_flush_log_at_trx_commit: 0
+        innodb_flush_neighbors: 0
+        innodb_io_capacity: 500
+        innodb_log_buffer_size: 134217728  # 128MB
+        innodb_read_io_threads: 8
+        innodb_write_io_threads: 8
+        sync_binlog: 0
+  DBSubnetGroup:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: "For db instance."
+      SubnetIds: !Ref RDSSubnetIds
+  DBInstance:
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      AllocatedStorage: "10"
+      AllowMajorVersionUpgrade: "false"
+      AutoMinorVersionUpgrade: "false"
+      BackupRetentionPeriod: "0"
+      DBInstanceClass: "db.t2.micro"
+      DBName: !Ref DBName
+      DBParameterGroupName: !Ref DBParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: "mysql"
+      EngineVersion: "5.6.35"
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref RDSDBPwd
+      MonitoringInterval: 0
+      MultiAZ: "false"
+      Port: !Ref DBPort
+      PubliclyAccessible: "false"
+      StorageEncrypted: "false"
+      StorageType: "gp2"
+      VPCSecurityGroups: !Ref RDSSecurityGroupIds
+  # --- Lambda ----
+  KmsEncryption:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: "serverless-vuls"
+        S3Key: "lambda-backed-cloud-formation-kms-encryption.zip"
+      Description: "Using AWS KMS to Encrypt Values in CloudFormation Stacks."
+      Handler: "main.lambda_handler"
+      MemorySize: 1536
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: "python2.7"
+      Timeout: 300
+  FetchNvd:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: "serverless-vuls"
+        S3Key: "fetch_nvd.zip"
+      Description: "Fetch vulnerability data from NVD."
+      Environment:
+        Variables:
+          INIT_YEAR: "2012"
+          DBHOST: !GetAtt DBInstance.Endpoint.Address
+          ENCRYPTED_DBPWD: !GetAtt RDSDBPasswordEncrypt.CipherText
+          DBUSER: !Ref DBUser
+          DBNAME: !Ref DBName
+          DBPORT: !Ref DBPort
+      Handler: "main.lambda_handler"
+      KmsKeyArn: !Ref KmsKeyId
+      MemorySize: 1536
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: "python2.7"
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds: !Ref LambdaSecurityGroupIds
+        SubnetIds: !Ref LambdaSubnetIds
+  FetchJvn:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: "serverless-vuls"
+        S3Key: "fetch_jvn.zip"
+      Description: "Fetch vulnerability data from JVN."
+      Environment:
+        Variables:
+          INIT_YEAR: "2012"
+          DBHOST: !GetAtt DBInstance.Endpoint.Address
+          ENCRYPTED_DBPWD: !GetAtt RDSDBPasswordEncrypt.CipherText
+          DBUSER: !Ref DBUser
+          DBNAME: !Ref DBName
+          DBPORT: !Ref DBPort
+      Handler: "main.lambda_handler"
+      KmsKeyArn: !Ref KmsKeyId
+      MemorySize: 1536
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: "python2.7"
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds: !Ref LambdaSecurityGroupIds
+        SubnetIds: !Ref LambdaSubnetIds
+  VulsScan:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: "serverless-vuls"
+        S3Key: "vuls_scan.zip"
+      Description: "Vulnerability scan by Vuls."
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref VulsScanReport
+          ENCRYPTED_SSHKEY: !GetAtt SSHKeyEncrypt.CipherText
+          DBHOST: !GetAtt DBInstance.Endpoint.Address
+          ENCRYPTED_DBPWD: !GetAtt RDSDBPasswordEncrypt.CipherText
+          DBUSER: !Ref DBUser
+          DBNAME: !Ref DBName
+          DBPORT: !Ref DBPort
+      Handler: "main.lambda_handler"
+      KmsKeyArn: !Ref KmsKeyId
+      MemorySize: 1536
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: "python2.7"
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds: !Ref LambdaSecurityGroupIds
+        SubnetIds: !Ref LambdaSubnetIds
+  # --- StepFunctions ----
+  FetchVulnerabilityDataFromNVDandJVN:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      RoleArn: !GetAtt StepFunctionsIAMRole.Arn
+      DefinitionString: !Sub |-
+        {
+          "Comment": "Fetch vulnerability data.",
+          "StartAt": "FetchNVD_2012",
+          "States": {
+            "FetchNVD_2012": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchNVD_2013"
+            },
+            "FetchNVD_2013": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchNVD_2014"
+            },
+            "FetchNVD_2014": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchNVD_2015"
+            },
+            "FetchNVD_2015": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchNVD_2016"
+            },
+            "FetchNVD_2016": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchNVD_2017"
+            },
+            "FetchNVD_2017": {
+              "Type": "Task",
+              "Resource": "${FetchNvd.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2012"
+            },
+            "FetchJVN_2012": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2013"
+            },
+            "FetchJVN_2013": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2014"
+            },
+            "FetchJVN_2014": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2015"
+            },
+            "FetchJVN_2015": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2016"
+            },
+            "FetchJVN_2016": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "FetchJVN_2017"
+            },
+            "FetchJVN_2017": {
+              "Type": "Task",
+              "Resource": "${FetchJvn.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["HandledError"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+  # S3
+  VulsScanReport:
+    Type: "AWS::S3::Bucket"
+  # --- Custom Resource ---
+  # Refer https://github.com/RealSalmon/lambda-backed-cloud-formation-kms-encryption
+  RDSDBPasswordEncrypt:
+    Type: Custom::RDSDBPasswordEncrypt
+    Properties:
+      ServiceToken: !GetAtt KmsEncryption.Arn
+      KeyId: !Ref KmsKeyId
+      PlainText: !Ref RDSDBPwd
+  SSHKeyEncrypt:
+    Type: Custom::SSHKeyEncrypt
+    Properties:
+      ServiceToken: !GetAtt KmsEncryption.Arn
+      KeyId: !Ref KmsKeyId
+      PlainText: !Ref SSHKey
+Outputs:
+  VulsScanReportBucketName:
+    Value: !Ref VulsScanReport
