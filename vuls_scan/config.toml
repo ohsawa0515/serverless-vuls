@@ -1,0 +1,6 @@
+[default]
+port        = "22"
+user        = "vuls"
+keyPath     = "/tmp/id_rsa"
+
+[servers]
