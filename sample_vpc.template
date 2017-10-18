@@ -1,0 +1,675 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Sample servers for Vuls scan'
+Resources:
+  vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      InstanceTenancy: default
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+      - Key: Name
+        Value: sample-vpc
+  subnetdba:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.21.0/24
+      AvailabilityZone: ap-northeast-1a
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: db-a
+  subnetprivatea:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.11.0/24
+      AvailabilityZone: ap-northeast-1a
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: private-a
+  subnetprivatec:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.12.0/24
+      AvailabilityZone: ap-northeast-1c
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: private-c
+  subnetdbc:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.22.0/24
+      AvailabilityZone: ap-northeast-1c
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: db-c
+  subnetpublicc:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.2.0/24
+      AvailabilityZone: ap-northeast-1c
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: public-c
+  subnetpublica:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 172.31.1.0/24
+      AvailabilityZone: ap-northeast-1a
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: public-a
+  igw:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+  dopt:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: ap-northeast-1.compute.internal
+      DomainNameServers:
+      - AmazonProvidedDNS
+  networkacl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId:
+        Ref: vpc
+  rtbprivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: private
+  rtbpublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: vpc
+      Tags:
+      - Key: Name
+        Value: public
+  natinstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      DisableApiTermination: 'false'
+      InstanceInitiatedShutdownBehavior: stop
+      ImageId: ami-78d6af1f
+      InstanceType: t2.nano
+      KeyName: aws_ohsawa
+      Monitoring: 'false'
+      SourceDestCheck: 'false'
+      Tags:
+      - Key: Name
+        Value: nat
+      NetworkInterfaces:
+      - DeleteOnTermination: 'true'
+        Description: Primary network interface
+        DeviceIndex: 0
+        SubnetId:
+          Ref: subnetpublica
+        PrivateIpAddresses:
+        - PrivateIpAddress: 172.31.1.138
+          Primary: 'true'
+        GroupSet:
+        - Ref: sgnat
+        AssociatePublicIpAddress: 'true'
+  webserver:
+    Type: AWS::EC2::Instance
+    Properties:
+      DisableApiTermination: 'false'
+      InstanceInitiatedShutdownBehavior: stop
+      ImageId: ami-383c1956
+      InstanceType: t2.nano
+      KeyName: aws_ohsawa
+      Monitoring: 'false'
+      Tags:
+      - Key: Name
+        Value: web001
+      - Key: vuls:scan
+        Value: 'true'
+      NetworkInterfaces:
+      - DeleteOnTermination: 'true'
+        Description: Primary network interface
+        DeviceIndex: 0
+        SubnetId:
+          Ref: subnetprivatea
+        PrivateIpAddresses:
+        - PrivateIpAddress: 172.31.11.208
+          Primary: 'true'
+        GroupSet:
+        - Ref: sgweb
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ""
+            -
+              - "#!/bin/bash -ex\n"
+              - "useradd -d /opt/vuls -s /bin/bash vuls\n"
+              - "mkdir -p /opt/vuls/.ssh\n"
+              - "chmod 700 /opt/vuls/.ssh\n"
+              - "chown vuls:vuls /opt/vuls/.ssh\n"
+              - "cat <<'EOF' > /opt/vuls/.ssh/authorized_keys\n"
+              - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC20JnQDDUXsXUPuefTP0SM7FOW4ksQDbGAg9deaJu+J2+W62RjtRnM3BxY+IJJO+q9H9bJzCxsQTaX3RlE/l8QvnYB4q04kD5wAmPq6CiJ0O9LK5yyRriI2iQxb+lRJkoChmpiIOW6okD+aETDS0RxXNeFXpLiTps7bcOeX1FKOFNCQY3GnpaeuyNypGFgfCUeKG+Pw09LLtIrgqNMD2D8EcMV90mps3oCCbaEB4rTB9S+JHkqYWQ0/TGrhhoyglmiN7E8sXFKAEtqa+GwdwvHzfSxr7dtouX1UCm7IIOeRnhZ6daCH1FMPBK7Sv0/ERo3WVJw2d+6oyWmj97KTrlh\n"
+              - "EOF\n"
+              - "chmod 600 /opt/vuls/.ssh/authorized_keys\n"
+              - "chown vuls:vuls /opt/vuls/.ssh/authorized_keys\n"
+  sgscan:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For scan instance
+      VpcId:
+        Ref: vpc
+  sgweb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: web server
+      VpcId:
+        Ref: vpc
+  sgdb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: db server
+      VpcId:
+        Ref: vpc
+  sgbastion:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For bastion
+      VpcId:
+        Ref: vpc
+  sgnat:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For NAT Instance
+      VpcId:
+        Ref: vpc
+  acl1:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      CidrBlock: 0.0.0.0/0
+      Egress: 'true'
+      Protocol: "-1"
+      RuleAction: allow
+      RuleNumber: '100'
+      NetworkAclId:
+        Ref: networkacl
+  acl2:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      CidrBlock: 0.0.0.0/0
+      Protocol: "-1"
+      RuleAction: allow
+      RuleNumber: '100'
+      NetworkAclId:
+        Ref: networkacl
+  subnetacl1:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetprivatec
+  subnetacl2:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetdbc
+  subnetacl3:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetdba
+  subnetacl4:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetprivatea
+  subnetacl5:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetpublicc
+  subnetacl6:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId:
+        Ref: networkacl
+      SubnetId:
+        Ref: subnetpublica
+  gw1:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: vpc
+      InternetGatewayId:
+        Ref: igw
+  subnetroute1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbprivate
+      SubnetId:
+        Ref: subnetdba
+  subnetroute2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbprivate
+      SubnetId:
+        Ref: subnetprivatea
+  subnetroute3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbprivate
+      SubnetId:
+        Ref: subnetdbc
+  subnetroute4:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbprivate
+      SubnetId:
+        Ref: subnetprivatec
+  subnetroute5:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbpublic
+      SubnetId:
+        Ref: subnetpublica
+  subnetroute6:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: rtbpublic
+      SubnetId:
+        Ref: subnetpublicc
+  route1:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId:
+        Ref: rtbprivate
+      InstanceId:
+        Ref: natinstance
+  route3:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId:
+        Ref: rtbpublic
+      GatewayId:
+        Ref: igw
+    DependsOn: gw1
+  dchpassoc1:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      VpcId:
+        Ref: vpc
+      DhcpOptionsId:
+        Ref: dopt
+  ingress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId:
+        Ref: sgbastion
+      #SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  ingress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgweb
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId:
+        Ref: sgscan
+      #SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  ingress3:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgweb
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId:
+        Ref: sgbastion
+      #SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  ingress4:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgdb
+      IpProtocol: tcp
+      FromPort: '3306'
+      ToPort: '3306'
+      SourceSecurityGroupId:
+        Ref: sgscan
+      #SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  ingress5:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgdb
+      IpProtocol: tcp
+      FromPort: '3306'
+      ToPort: '3306'
+      SourceSecurityGroupId:
+        Ref: sgweb
+        #SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  #ingress6:
+  #  Type: AWS::EC2::SecurityGroupIngress
+  #  Properties:
+  #    GroupId:
+  #      Ref: sgdb
+  #    IpProtocol: tcp
+  #    FromPort: '3306'
+  #    ToPort: '3306'
+  #    SourceSecurityGroupId:
+  #      Ref: sgbastion
+  #    SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  #ingress7:
+  #  Type: AWS::EC2::SecurityGroupIngress
+  #  Properties:
+  #    GroupId:
+  #      Ref: sgbastion
+  #    IpProtocol: tcp
+  #    FromPort: '22'
+  #    ToPort: '22'
+  #    SourceSecurityGroupId:
+  #      Ref: sgscan
+  #    SourceSecurityGroupOwnerId: !Sub AWS::AccountId
+  ingress8:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgbastion
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 0.0.0.0/0
+  ingress9:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgnat
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 172.31.0.0/16
+  ingress10:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgnat
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 172.31.0.0/16
+  ingress11:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: sgnat
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 172.31.0.0/16
+  egress1:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress2:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      DestinationSecurityGroupId:
+        Ref: sgweb
+  egress3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      DestinationSecurityGroupId:
+        Ref: sgbastion
+  egress4:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '3306'
+      ToPort: '3306'
+      DestinationSecurityGroupId:
+        Ref: sgdb
+  egress5:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgscan
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 0.0.0.0/0
+  egress6:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgweb
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress7:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgweb
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 0.0.0.0/0
+  egress8:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgweb
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 0.0.0.0/0
+  egress9:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgdb
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+  egress10:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgbastion
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress11:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgbastion
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 172.31.0.0/16
+  #egress12:
+  #  Type: AWS::EC2::SecurityGroupEgress
+  #  Properties:
+  #    GroupId:
+  #      Ref: sgbastion
+  #    IpProtocol: tcp
+  #    FromPort: '3306'
+  #    ToPort: '3306'
+  #    DestinationSecurityGroupId:
+  #      Ref: sgdb
+  egress13:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgbastion
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 0.0.0.0/0
+  egress14:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgnat
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress15:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: sgnat
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 0.0.0.0/0
+  KMS:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "For vuls scan"
+      Enabled: "true"
+      EnableKeyRotation: "false"
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: "key-consolepolicy"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - kms:*
+            Resource: "*"
+          -
+            Sid: "Allow access for Key Administrators"
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+                - !Sub arn:aws:iam::${AWS::AccountId}:role/lambda_vuls_execution
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+          -
+            Sid: "Allow attachment of persistent resources"
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:RevokeGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: "true"
+  KMSVuls:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: "alias/vuls_scan"
+      TargetKeyId: !Ref KMS
+Outputs:
+  LambdaSecurityGroupIds:
+    Value: !Ref sgscan
+  LambdaSubnetIds:
+    Value:
+      Fn::Join:
+        - ","
+        -
+          - !Ref subnetprivatea
+          - !Ref subnetprivatec
+  RDSSecurityGroupIds:
+    Value: !Ref sgdb
+  RDSSubnetIds:
+    Value:
+      Fn::Join:
+        - ","
+        -
+          - !Ref subnetdba
+          - !Ref subnetdbc
+  KmsKeyId:
+    Value: !GetAtt KMS.Arn
