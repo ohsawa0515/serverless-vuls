@@ -1,3 +1,4 @@
 */go-cve-dictionary
 */ec2-vuls-config
 */vuls
+lambda-backed-cloud-formation-kms-encryption/*.py
