@@ -1,6 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Sample servers for Vuls scan'
 Parameters:
+  KeyPair:
+    Type: "String"
+    Description: "Name of keypair"
   RSAPublicKey:
     Type: "String"
     Description: "RSA public key"
@@ -112,7 +115,7 @@ Resources:
       InstanceInitiatedShutdownBehavior: stop
       ImageId: ami-78d6af1f
       InstanceType: t2.nano
-      KeyName: aws_ohsawa
+      KeyName: !Ref KeyPair
       Monitoring: 'false'
       SourceDestCheck: 'false'
       Tags:
@@ -134,7 +137,7 @@ Resources:
       InstanceInitiatedShutdownBehavior: stop
       ImageId: ami-383c1956
       InstanceType: t2.nano
-      KeyName: aws_ohsawa
+      KeyName: !Ref KeyPair
       Monitoring: 'false'
       Tags:
       - Key: Name
