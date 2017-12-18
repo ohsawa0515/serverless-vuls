@@ -152,7 +152,7 @@ Resources:
         S3Key: "lambda-backed-cloud-formation-kms-encryption.zip"
       Description: "Using AWS KMS to Encrypt Values in CloudFormation Stacks."
       Handler: "main.lambda_handler"
-      MemorySize: 1536
+      MemorySize: 3008
       Role: !GetAtt LambdaIAMRole.Arn
       Runtime: "python2.7"
       Timeout: 300
@@ -173,7 +173,7 @@ Resources:
           DBPORT: !Ref DBPort
       Handler: "main.lambda_handler"
       KmsKeyArn: !Ref KmsKeyId
-      MemorySize: 1536
+      MemorySize: 3008
       Role: !GetAtt LambdaIAMRole.Arn
       Runtime: "python2.7"
       Timeout: 300
@@ -197,7 +197,7 @@ Resources:
           DBPORT: !Ref DBPort
       Handler: "main.lambda_handler"
       KmsKeyArn: !Ref KmsKeyId
-      MemorySize: 1536
+      MemorySize: 3008
       Role: !GetAtt LambdaIAMRole.Arn
       Runtime: "python2.7"
       Timeout: 300
@@ -222,7 +222,7 @@ Resources:
           DBPORT: !Ref DBPort
       Handler: "main.lambda_handler"
       KmsKeyArn: !Ref KmsKeyId
-      MemorySize: 1536
+      MemorySize: 3008
       Role: !GetAtt LambdaIAMRole.Arn
       Runtime: "python2.7"
       Timeout: 300
